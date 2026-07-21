@@ -48,7 +48,7 @@ export default async function Home() {
   return (
     <main className="mx-auto max-w-2xl px-5 py-8">
       {/* 헤더 */}
-      <header className="mb-6 flex items-center justify-between">
+      <header className="glass glass-header mb-6 flex items-center justify-between rounded-2xl px-5 py-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900">FC 팔로업</h1>
           <p className="text-sm text-gray-500">
@@ -58,12 +58,12 @@ export default async function Home() {
         <div className="flex items-center gap-3">
           <a
             href="/calendar"
-            className="text-sm font-medium text-blue-600 hover:text-blue-800"
+            className="text-sm font-medium text-orange-600 hover:text-orange-700"
           >
             📅 행사 캘린더
           </a>
           <form action={signOut}>
-            <button className="text-sm text-gray-400 hover:text-gray-600">
+            <button className="text-sm text-gray-500 hover:text-gray-700">
               로그아웃
             </button>
           </form>
@@ -78,21 +78,21 @@ export default async function Home() {
           return (
             <div
               key={duty.id}
-              className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
+              className="glass rounded-2xl p-5"
             >
               <div className="flex items-start justify-between">
                 <div>
                   <h2 className="font-semibold text-gray-900">{duty.title}</h2>
-                  <p className="mt-0.5 text-xs text-gray-400">
+                  <p className="mt-0.5 text-xs text-gray-500">
                     매월 {duty.day_of_month}일 · {duty.remind_days}일간 리마인드
                   </p>
                 </div>
                 {done ? (
-                  <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
+                  <span className="rounded-full bg-green-100/80 px-3 py-1 text-xs font-medium text-green-700">
                     완료 ✅
                   </span>
                 ) : (
-                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+                  <span className="rounded-full bg-amber-100/80 px-3 py-1 text-xs font-medium text-amber-700">
                     대기중
                   </span>
                 )}
@@ -106,7 +106,7 @@ export default async function Home() {
                 <select
                   name="member_id"
                   defaultValue={a?.member_id ?? ""}
-                  className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="flex-1 rounded-lg border border-white/60 bg-white/70 px-3 py-2 text-sm text-gray-800 focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/40"
                 >
                   <option value="">— 담당자 선택 —</option>
                   {(members ?? []).map((m) => (
@@ -115,7 +115,7 @@ export default async function Home() {
                     </option>
                   ))}
                 </select>
-                <button className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">
+                <button className="brand-grad brand-grad-hover rounded-xl px-4 py-2 text-sm font-medium text-white shadow-sm">
                   지정
                 </button>
               </form>
@@ -130,9 +130,9 @@ export default async function Home() {
                     value={done ? "pending" : "done"}
                   />
                   <button
-                    className={`w-full rounded-lg py-2 text-sm font-medium ${
+                    className={`w-full rounded-xl py-2 text-sm font-medium ${
                       done
-                        ? "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                        ? "bg-white/60 text-gray-600 hover:bg-white/80"
                         : "bg-green-600 text-white hover:bg-green-500"
                     }`}
                   >
@@ -154,26 +154,26 @@ export default async function Home() {
           {(members ?? []).map((m) => (
             <div
               key={m.id}
-              className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm"
+              className="glass flex items-center justify-between rounded-xl px-4 py-2 text-sm"
             >
               <span className="text-gray-800">
                 {m.name}
                 {m.telegram_username && (
-                  <span className="ml-2 text-xs text-gray-400">
+                  <span className="ml-2 text-xs text-gray-500">
                     @{m.telegram_username}
                   </span>
                 )}
               </span>
               <form action={removeMember}>
                 <input type="hidden" name="id" value={m.id} />
-                <button className="text-xs text-gray-400 hover:text-red-500">
+                <button className="text-xs text-gray-500 hover:text-red-500">
                   삭제
                 </button>
               </form>
             </div>
           ))}
           {(members ?? []).length === 0 && (
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-gray-500">
               아직 부서원이 없어요. 아래에서 추가하세요.
             </p>
           )}
@@ -185,23 +185,23 @@ export default async function Home() {
             name="name"
             placeholder="이름"
             required
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="flex-1 rounded-lg border border-white/60 bg-white/70 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/40"
           />
           <input
             name="telegram_username"
             placeholder="텔레그램 아이디(선택)"
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="flex-1 rounded-lg border border-white/60 bg-white/70 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400/40"
           />
-          <button className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700">
+          <button className="brand-grad brand-grad-hover rounded-xl px-4 py-2 text-sm font-medium text-white shadow-sm">
             추가
           </button>
         </form>
       </section>
 
       {/* 테스트 알림 */}
-      <section className="mt-8 border-t border-gray-100 pt-6">
+      <section className="mt-8 border-t border-white/40 pt-6">
         <form action={sendTestMessage}>
-          <button className="text-sm text-blue-600 hover:text-blue-800">
+          <button className="text-sm text-orange-600 hover:text-orange-700">
             🔔 단톡방에 테스트 알림 보내기
           </button>
         </form>

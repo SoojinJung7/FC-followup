@@ -18,11 +18,11 @@ export default async function CalendarPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-6">
-      <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">행사 캘린더</h1>
+      <header className="glass-header mb-5 flex items-center justify-between rounded-2xl px-5 py-4">
+        <h1 className="text-xl font-bold tracking-tight text-gray-900">행사 캘린더</h1>
         <Link
           href="/"
-          className="text-sm text-gray-500 hover:text-gray-800"
+          className="text-sm font-medium text-gray-500 transition-colors hover:text-orange-600"
         >
           ← 업무 팔로업
         </Link>

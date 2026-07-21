@@ -24,3 +24,35 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── 리퀴드 글라스(리얼타임 필립 톤) ──────────────────────────────
+   고정 배경 위에 프로스티드 글라스 패널이 떠 있는 애플 스타일. 따뜻한 회색 그라데이션. */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  background: radial-gradient(120% 120% at 50% 30%, #eceef1 0%, #d3d7dd 55%, #b7bdc6 100%);
+}
+
+/* 프로스티드 글라스 패널 — 반투명 + 배경 블러 */
+.glass {
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 8px 30px rgba(80, 80, 90, 0.1);
+}
+
+/* 패널 안의 헤더/구분선 — 유리 위 유리 느낌 */
+.glass-header {
+  background: rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* 브랜드 그라데이션: 테라코타 → 벽돌빛(대각선). 주요 버튼에 사용. */
+.brand-grad {
+  background-image: linear-gradient(135deg, #d66a43 0%, #a84440 100%);
+}
+.brand-grad-hover:hover {
+  background-image: linear-gradient(135deg, #c85e38 0%, #973a36 100%);
+}
