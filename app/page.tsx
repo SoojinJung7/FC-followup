@@ -55,11 +55,19 @@ export default async function Home() {
             {year}년 {month}월 · {user.email}
           </p>
         </div>
-        <form action={signOut}>
-          <button className="text-sm text-gray-400 hover:text-gray-600">
-            로그아웃
-          </button>
-        </form>
+        <div className="flex items-center gap-3">
+          <a
+            href="/calendar"
+            className="text-sm font-medium text-blue-600 hover:text-blue-800"
+          >
+            📅 행사 캘린더
+          </a>
+          <form action={signOut}>
+            <button className="text-sm text-gray-400 hover:text-gray-600">
+              로그아웃
+            </button>
+          </form>
+        </div>
       </header>
 
       {/* 업무 카드들 */}
