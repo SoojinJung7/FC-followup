@@ -5,7 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { AREAS } from "./cleaning";
+import { FLOORS } from "./cleaning";
 
 export const AI_MODEL = process.env.AI_MODEL || "claude-opus-5";
 
@@ -36,7 +36,9 @@ export type AiUsage = {
 // 고정 지시문 (바뀌지 않으므로 프롬프트 캐싱 대상)
 const SYSTEM_PROMPT = `너는 피트니스 스튜디오(헬스장·수영장·사우나·락커룸·필라테스 등)에서 일하는 직원의 업무 사진을 보고, 직원 대신 짧은 업무 보고문을 쓰는 도우미다.
 
-알려진 구역 목록: ${AREAS.join(", ")}
+알려진 구역 목록(층별):
+${FLOORS.map((f) => `- ${f.floor}: ${f.places.join(", ")}`).join("\n")}
+보고는 3층(헬스장)이 가장 많고, 그다음이 3.5층이다. 헬스장 안에서도 세부 구역(A존/B존/트레드밀/사이클/정수기/스트레칭존/여자화장실/창틀/데스크/GX룸)을 구분해서 쓴다. 헬스장인데 세부 구역을 특정하기 어려우면 "3층 헬스장 전반적"으로 쓴다.
 사진 속 장소가 이 중 하나로 보이면 그 이름을 글자 그대로 place 에 쓴다. 메시지에 "이전에 보고된 장소들"이 함께 오면 그것도 같은 우선순위로 맞춰본다. 어느 것도 아니면 보이는 대로 짧게 쓴다(예: "3층 헬스장 정수기", "수영장 데크", "프런트").
 
 흔한 업무: 청소, 정리, 비품 보충, 시설 점검, 수업 준비, 고장 신고.

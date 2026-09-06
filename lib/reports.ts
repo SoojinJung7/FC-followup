@@ -5,7 +5,7 @@
 // AI 가 없거나 실패하면 → 구역 버튼(예전 방식)으로 내려가서 보고는 절대 안 막힘
 // ============================================================
 import { createAdminClient } from "@/lib/supabase/admin";
-import { AREAS, tg, cleaningChatId, kstParts, kstTodayRange, buildSummary, type PostedRow } from "@/lib/cleaning";
+import { AREAS, FLOORS, shortName, tg, cleaningChatId, kstParts, kstTodayRange, buildSummary, type PostedRow } from "@/lib/cleaning";
 import { analyzePhotos, estimateUsd, type Analysis, type AiImage, type AiUsage } from "@/lib/ai";
 
 export type TgUser = { id: number; first_name?: string; last_name?: string; username?: string };
@@ -277,8 +277,8 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
     const mid = await showPrompt(
       chatId,
       ackId,
-      `어느 구역이에요? 👇\n<i>사진 ${count}장 · ${label} ${timeStr}</i>`,
-      areaKeyboard(reportId),
+      `어느 층이에요? 👇\n<i>사진 ${count}장 · ${label} ${timeStr}</i>`,
+      floorKeyboard(reportId, true),
     );
     await supabase
       .from("reports")
@@ -288,12 +288,35 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
   console.log(`[report ${reportId}] 분석→버튼까지 ${Date.now() - t0}ms (사진 ${count}장, AI ${analysis ? "성공" : "없음"})`);
 }
 
-export function areaKeyboard(reportId: string, withTyping = false) {
+// 두 개씩 한 줄로
+function rows2<T>(items: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += 2) out.push(items.slice(i, i + 2));
+  return out;
+}
+
+// 1단계: 층 고르기
+export function floorKeyboard(reportId: string, withTyping = false) {
   return {
     inline_keyboard: [
-      ...AREAS.map((a, i) => [{ text: `🧹 ${a}`, callback_data: `r:${reportId}:a${i}` }]),
+      ...rows2(FLOORS.map((f, i) => ({ text: f.floor, callback_data: `r:${reportId}:f${i}` }))),
       ...(withTyping ? [[{ text: "✍️ 다른 장소 직접 입력", callback_data: `r:${reportId}:t` }]] : []),
       [{ text: "✖ 취소", callback_data: `r:${reportId}:x` }],
+    ],
+  };
+}
+
+// 2단계: 그 층의 장소 고르기
+export function placeKeyboard(reportId: string, floorIdx: number) {
+  const f = FLOORS[floorIdx];
+  const btns = f.places.map((p) => ({ text: shortName(p), callback_data: `r:${reportId}:a${AREAS.indexOf(p)}` }));
+  return {
+    inline_keyboard: [
+      ...rows2(btns),
+      [
+        { text: "↩ 다른 층", callback_data: `r:${reportId}:fix` },
+        { text: "✖ 취소", callback_data: `r:${reportId}:x` },
+      ],
     ],
   };
 }
@@ -358,11 +381,12 @@ export type Decision =
   | { kind: "option"; index: number }
   | { kind: "fix" }
   | { kind: "area"; index: number }
+  | { kind: "floor"; index: number }
   | { kind: "type" }
   | { kind: "cancel" };
 
 export function parseCallback(data: string): { reportId: string; decision: Decision } | null {
-  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|t|o(\d)|a(\d))$/.exec(data);
+  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|t|o(\d+)|a(\d+)|f(\d+))$/.exec(data);
   if (!m) return null;
   const reportId = m[1];
   const code = m[2];
@@ -371,7 +395,8 @@ export function parseCallback(data: string): { reportId: string; decision: Decis
   if (code === "x") return { reportId, decision: { kind: "cancel" } };
   if (code === "t") return { reportId, decision: { kind: "type" } };
   if (code.startsWith("o")) return { reportId, decision: { kind: "option", index: Number(m[3]) } };
-  return { reportId, decision: { kind: "area", index: Number(m[4]) } };
+  if (code.startsWith("a")) return { reportId, decision: { kind: "area", index: Number(m[4]) } };
+  return { reportId, decision: { kind: "floor", index: Number(m[5]) } };
 }
 
 export async function handleDecision(reportId: string, decision: Decision): Promise<string> {
@@ -394,8 +419,20 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
     await tg("editMessageText", {
       chat_id: report.chat_id,
       message_id: report.prompt_message_id,
-      text: "어느 구역이에요? 👇",
-      reply_markup: areaKeyboard(reportId, true),
+      text: "어느 층이에요? 👇",
+      reply_markup: floorKeyboard(reportId, true),
+    });
+    return "";
+  }
+
+  if (decision.kind === "floor") {
+    const f = FLOORS[decision.index];
+    if (!f) return "알 수 없는 층이에요.";
+    await tg("editMessageText", {
+      chat_id: report.chat_id,
+      message_id: report.prompt_message_id,
+      text: `${f.floor} 어디예요? 👇`,
+      reply_markup: placeKeyboard(reportId, decision.index),
     });
     return "";
   }
@@ -516,11 +553,6 @@ async function postToGroup(
 
     await editPrompt(report, `✅ <b>보고 완료</b> (${timeStr})\n${escapeHtml(text)}`);
 
-    // 오늘 전부 끝났으면 축하 한 줄
-    const summary = await todaySummaryText();
-    if (summary.includes("전부 완료")) {
-      await tg("sendMessage", { chat_id: report.chat_id, parse_mode: "HTML", text: summary });
-    }
     return "보고 완료!";
   } catch (e) {
     console.error("공용방 게시 실패:", e);

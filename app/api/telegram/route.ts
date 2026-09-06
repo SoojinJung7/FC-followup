@@ -1,5 +1,5 @@
 import { NextResponse, after } from "next/server";
-import { AREAS, tg } from "@/lib/cleaning";
+import { AREAS, FLOORS, tg } from "@/lib/cleaning";
 import { AI_MODEL } from "@/lib/ai";
 import {
   collectPhoto,
@@ -55,7 +55,7 @@ async function onText(msg: TgMessage) {
         `1. 일한 곳 사진을 찍어서 여기로 보내세요 (여러 장 한 번에 OK)\n` +
         `2. 봇이 보고문을 써서 보여주면 <b>[✅ 이대로 보고]</b> 한 번\n` +
         `3. 끝! 공용방에 사진과 문장이 자동으로 올라갑니다\n\n` +
-        `구역: ${AREAS.join(" / ")}\n` +
+        `층: ${FLOORS.map((f) => f.floor).join(" / ")} (구역 ${AREAS.length}곳)\n` +
         `/오늘 → 오늘 현황 · /비용 → 이번 달 AI 비용\n\n` +
         `<i>AI: ${aiOn ? AI_MODEL : "꺼짐(구역 버튼 방식)"} · 내 텔레그램 번호: ${msg.from?.id}</i>`,
     );
