@@ -67,12 +67,32 @@ export async function collectPhoto(opts: {
     { onConflict: "report_id,message_id", ignoreDuplicates: true },
   );
 
+  // 묶음당 딱 한 번, 바로 "받았어요" 답장 (직원은 여기서 폰을 내려놔도 됨)
+  const { data: winner } = await supabase
+    .from("reports")
+    .update({ prompt_message_id: -1 })
+    .eq("id", report.id)
+    .is("prompt_message_id", null)
+    .select("id")
+    .maybeSingle();
+  if (winner) {
+    try {
+      const sent = await tg<{ message_id: number }>("sendMessage", {
+        chat_id: opts.chatId,
+        text: "📷 받았어요! 보고문 쓰는 중이에요…",
+      });
+      await supabase.from("reports").update({ prompt_message_id: sent.message_id }).eq("id", report.id);
+    } catch (e) {
+      console.error("접수 답장 실패:", e);
+    }
+  }
+
   return { reportId: report.id as string, status: report.status as string };
 }
 
 // ---------- 2) 묶음이 다 모였는지 확인하고, 내가 마지막 사진이면 처리 시작 ----------
-export async function processAfterCollect(reportId: string, myMessageId: number) {
-  await sleep(2500); // 앨범의 나머지 사진이 도착할 시간
+export async function processAfterCollect(reportId: string, myMessageId: number, isAlbum: boolean) {
+  if (isAlbum) await sleep(1500); // 앨범의 나머지 사진이 도착할 시간 (한 장이면 바로)
   const supabase = createAdminClient();
 
   const { data: photos } = await supabase
@@ -140,8 +160,30 @@ async function downloadTelegramImage(fileId: string): Promise<AiImage> {
   return { data: buf.toString("base64"), media_type };
 }
 
+// 접수 메시지가 있으면 그걸 결과로 바꾸고, 없으면 새로 보냄
+async function showPrompt(
+  chatId: number,
+  ackMessageId: number | null,
+  text: string,
+  reply_markup: unknown,
+): Promise<number> {
+  if (ackMessageId && ackMessageId > 0) {
+    try {
+      await tg("editMessageText", { chat_id: chatId, message_id: ackMessageId, parse_mode: "HTML", text, reply_markup });
+      return ackMessageId;
+    } catch (e) {
+      console.error("접수 메시지 수정 실패, 새로 보냄:", e);
+    }
+  }
+  const sent = await tg<{ message_id: number }>("sendMessage", { chat_id: chatId, parse_mode: "HTML", text, reply_markup });
+  return sent.message_id;
+}
+
 async function analyzeAndAsk(reportId: string, chatId: number, reporterName: string) {
+  const t0 = Date.now();
   const supabase = createAdminClient();
+  const { data: rep } = await supabase.from("reports").select("prompt_message_id").eq("id", reportId).maybeSingle();
+  const ackId = (rep?.prompt_message_id as number | null) ?? null;
   const { data: photos } = await supabase
     .from("report_photos")
     .select("small_file_id")
@@ -158,7 +200,9 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
     for (let attempt = 1; attempt <= 2 && !analysis; attempt++) {
       try {
         const images = await Promise.all(photos!.map((p) => downloadTelegramImage(p.small_file_id)));
+        const tAi = Date.now();
         const r = await analyzePhotos(images, reporterName);
+        console.log(`[report ${reportId}] AI ${Date.now() - tAi}ms`);
         analysis = r.analysis;
         usage = r.usage;
         model = r.model;
@@ -179,13 +223,12 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
     if (isLow) {
       // 애매함 → 질문 딱 1개, 버튼으로만 답
       const opts = analysis.question_options.slice(0, 4);
-      const sent = await tg<{ message_id: number }>("sendMessage", {
-        chat_id: chatId,
-        parse_mode: "HTML",
-        text:
-          `🙋 <b>하나만 확인할게요</b>\n${analysis.question}\n\n` +
+      promptMessageId = await showPrompt(
+        chatId,
+        ackId,
+        `🙋 <b>하나만 확인할게요</b>\n${analysis.question}\n\n` +
           `<i>사진 ${count}장 · ${label} ${timeStr}</i>`,
-        reply_markup: {
+        {
           inline_keyboard: [
             ...opts.map((o, i) => [{ text: o.label, callback_data: `r:${reportId}:o${i}` }]),
             [
@@ -194,16 +237,14 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
             ],
           ],
         },
-      });
-      promptMessageId = sent.message_id;
+      );
     } else {
-      const sent = await tg<{ message_id: number }>("sendMessage", {
-        chat_id: chatId,
-        parse_mode: "HTML",
-        text:
-          `🤖 이렇게 보고할게요\n\n<b>${escapeHtml(analysis.report_text)}</b>\n\n` +
+      promptMessageId = await showPrompt(
+        chatId,
+        ackId,
+        `🤖 이렇게 보고할게요\n\n<b>${escapeHtml(analysis.report_text)}</b>\n\n` +
           `<i>사진 ${count}장 · ${label} ${timeStr} · 확신 ${confKo}</i>`,
-        reply_markup: {
+        {
           inline_keyboard: [
             [{ text: "✅ 이대로 보고", callback_data: `r:${reportId}:ok` }],
             [
@@ -212,8 +253,7 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
             ],
           ],
         },
-      });
-      promptMessageId = sent.message_id;
+      );
     }
 
     await supabase
@@ -234,17 +274,18 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
       .eq("id", reportId);
   } else {
     // AI 없음/실패 → 예전 방식: 구역 버튼
-    const sent = await tg<{ message_id: number }>("sendMessage", {
-      chat_id: chatId,
-      parse_mode: "HTML",
-      text: `어느 구역이에요? 👇\n<i>사진 ${count}장 · ${label} ${timeStr}</i>`,
-      reply_markup: areaKeyboard(reportId),
-    });
+    const mid = await showPrompt(
+      chatId,
+      ackId,
+      `어느 구역이에요? 👇\n<i>사진 ${count}장 · ${label} ${timeStr}</i>`,
+      areaKeyboard(reportId),
+    );
     await supabase
       .from("reports")
-      .update({ status: "awaiting", prompt_message_id: sent.message_id, analyzed_at: new Date().toISOString() })
+      .update({ status: "awaiting", prompt_message_id: mid, analyzed_at: new Date().toISOString() })
       .eq("id", reportId);
   }
+  console.log(`[report ${reportId}] 분석→버튼까지 ${Date.now() - t0}ms (사진 ${count}장, AI ${analysis ? "성공" : "없음"})`);
 }
 
 export function areaKeyboard(reportId: string) {

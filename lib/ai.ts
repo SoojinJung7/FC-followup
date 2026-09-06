@@ -69,7 +69,7 @@ export async function analyzePhotos(
       { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
     ],
     output_config: {
-      effort: "medium",
+      effort: "low", // 단순 분류 작업 → 빠르게
       format: zodOutputFormat(AnalysisSchema),
     },
     messages: [

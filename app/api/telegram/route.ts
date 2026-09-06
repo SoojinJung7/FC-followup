@@ -134,7 +134,7 @@ export async function POST(request: Request) {
         // 텔레그램에 먼저 200 을 돌려주고, 뒤에서 모으기→분석→버튼 진행
         after(async () => {
           try {
-            await processAfterCollect(reportId, msg.message_id);
+            await processAfterCollect(reportId, msg.message_id, !!msg.media_group_id);
           } catch (e) {
             console.error("보고 처리 오류:", e);
           }
