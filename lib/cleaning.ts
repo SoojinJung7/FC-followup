@@ -68,26 +68,29 @@ export function kstTodayRange(d: Date = new Date()) {
   return { dateStr, startISO: start.toISOString(), endISO: end.toISOString() };
 }
 
-export type CleaningLog = {
-  area: string;
-  reported_at: string;
-  reporter_name: string | null;
+export type PostedRow = {
+  place: string | null;
+  posted_at: string | null;
 };
 
 // 오늘 완료/미완료 요약 글 만들기 (HTML)
-export function buildSummary(logs: CleaningLog[], dateLabel: string) {
-  const doneMap = new Map<string, string>(); // 구역 -> 마지막 보고 시각
-  for (const l of logs) {
-    const { timeStr } = kstParts(new Date(l.reported_at));
-    doneMap.set(l.area, timeStr);
+export function buildSummary(rows: PostedRow[], dateLabel: string) {
+  const doneMap = new Map<string, string>(); // 알려진 구역 -> 마지막 보고 시각
+  const extras: string[] = [];               // 알려진 구역 밖 장소들
+  for (const r of rows) {
+    if (!r.place || !r.posted_at) continue;
+    const { timeStr } = kstParts(new Date(r.posted_at));
+    if ((AREAS as readonly string[]).includes(r.place)) doneMap.set(r.place, timeStr);
+    else extras.push(`${r.place} ${timeStr}`);
   }
   const done = AREAS.filter((a) => doneMap.has(a));
   const left = AREAS.filter((a) => !doneMap.has(a));
 
-  const lines = [`🧹 <b>오늘 청소 현황</b> · ${dateLabel}`, ""];
+  const lines = [`🧹 <b>오늘 업무 보고 현황</b> · ${dateLabel}`, ""];
   for (const a of AREAS) {
     lines.push(doneMap.has(a) ? `✅ ${a}  <i>${doneMap.get(a)}</i>` : `⬜ ${a}`);
   }
+  if (extras.length) lines.push(`➕ 그 외: ${extras.join(", ")}`);
   lines.push("");
   lines.push(
     left.length === 0
