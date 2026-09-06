@@ -8,6 +8,9 @@ import {
   parseCallback,
   handleDecision,
   handleTypedPlace,
+  createTextReport,
+  finishTextReport,
+  displayName,
   todaySummaryText,
   monthCostText,
   type TgUser,
@@ -53,6 +56,7 @@ async function onText(msg: TgMessage) {
     await send(
       `📷 <b>사진 업무보고 봇</b>\n\n` +
         `1. 일한 곳 사진을 찍어서 여기로 보내세요 (여러 장 한 번에 OK)\n` +
+        `   사진이 없는 일은 글로 한 줄만: "유선상담 완료 김OO PT 문의"\n` +
         `2. 봇이 보고문을 써서 보여주면 <b>[✅ 이대로 보고]</b> 한 번\n` +
         `3. 끝! 공용방에 사진과 문장이 자동으로 올라갑니다\n\n` +
         `층: ${FLOORS.map((f) => f.floor).join(" / ")} (구역 ${AREAS.length}곳)\n` +
@@ -71,7 +75,7 @@ async function onText(msg: TgMessage) {
   }
   await tg("sendMessage", {
     chat_id: msg.chat.id,
-    text: "사진을 보내주시면 제가 보고문을 써드릴게요 📷  (/오늘 현황, /비용 비용)",
+    text: "모르는 명령이에요. /start 를 쳐보세요.",
   });
 }
 
@@ -142,9 +146,28 @@ export async function POST(request: Request) {
         });
       } else if (msg.text) {
         after(() => recoverStale(msg.chat.id).catch((e) => console.error("복구 오류:", e)));
-        // 장소를 글자로 답하는 중이면 그걸로 게시
-        const handled = await handleTypedPlace(msg.chat.id, msg.text);
-        if (!handled) await onText(msg);
+        const text = msg.text.trim();
+        // 1) 장소를 글자로 답하는 중이면 그걸로 게시
+        if (await handleTypedPlace(msg.chat.id, text)) return NextResponse.json({ ok: true });
+        // 2) 명령어
+        if (text.startsWith("/") || text === "?") {
+          await onText(msg);
+        } else {
+          // 3) 그 외 글자 = 사진 없는 보고 (예: "유선상담 완료 김OO PT 문의")
+          const { reportId, ackId } = await createTextReport({
+            chatId: msg.chat.id,
+            messageId: msg.message_id,
+            from: msg.from,
+            text,
+          });
+          after(async () => {
+            try {
+              await finishTextReport(reportId, msg.chat.id, ackId, text, displayName(msg.from));
+            } catch (e) {
+              console.error("글자 보고 처리 오류:", e);
+            }
+          });
+        }
       } else {
         await tg("sendMessage", {
           chat_id: msg.chat.id,

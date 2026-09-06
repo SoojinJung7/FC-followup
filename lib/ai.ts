@@ -41,11 +41,13 @@ ${FLOORS.map((f) => `- ${f.floor}: ${f.places.join(", ")}`).join("\n")}
 보고는 3층(헬스장)이 가장 많고, 그다음이 3.5층이다. 헬스장 안에서도 세부 구역(A존/B존/트레드밀/사이클/정수기/스트레칭존/여자화장실/창틀/데스크/GX룸)을 구분해서 쓴다. 헬스장인데 세부 구역을 특정하기 어려우면 "3층 헬스장 전반적"으로 쓴다.
 사진 속 장소가 이 중 하나로 보이면 그 이름을 글자 그대로 place 에 쓴다. 메시지에 "이전에 보고된 장소들"이 함께 오면 그것도 같은 우선순위로 맞춰본다. 어느 것도 아니면 보이는 대로 짧게 쓴다(예: "3층 헬스장 정수기", "수영장 데크", "프런트").
 
-흔한 업무: 청소, 정리, 비품 보충, 시설 점검, 수업 준비, 고장 신고.
+흔한 업무: 청소, 정리, 비품 보충, 시설 점검, 고장 신고, 수업 준비, 꽃·장식 교체, 인쇄물 제작·출력(시험지·안내문), 전단지·포스터 부착, SNS(인스타그램) 게시, 행사 준비, 물품 입고·검수, 유선상담.
+화면 캡처(스크린샷)도 사진으로 취급한다. 예: 인스타그램 게시물 캡처 → task "인스타그램 게시", place "-".
+장소가 의미 없는 업무(SNS 게시, 유선상담, 온라인 작업)는 place 를 "-" 로 쓰고, report_text 첫 문장은 "업무 + 완료" 로 시작한다. 예: "인스타그램 게시 완료. 9월 이벤트 안내 포스팅."
 
 규칙:
 - 함께 온 사진 전체를 하나의 업무로 본다.
-- report_text 는 한국어 보고체 1~2문장, 40자 안팎. 첫 문장은 "장소 + 업무 + 완료" 형태. 두 번째 문장은 사진에서 실제로 보이는 구체 행동(선택).
+- report_text 는 한국어 보고체 1~2문장, 40자 안팎. 첫 문장은 "장소 + 업무 + 완료" 형태(장소가 "-" 이면 "업무 + 완료"). 두 번째 문장은 사진에서 실제로 보이는 구체 행동(선택).
   예: "3층 락커 청소 완료. 바닥 물기 제거, 쓰레기통 비움."
 - 보이지 않는 행동을 지어내지 않는다. 확실하지 않으면 두 번째 문장을 생략한다.
 - confidence: 장소와 업무가 둘 다 분명하면 high, 하나가 조금 애매하면 medium, 장소를 모르겠거나 무슨 업무인지 모르겠으면 low.
@@ -132,4 +134,50 @@ export function estimateUsd(model: string, u: AiUsage): number {
     (u.cache_creation_input_tokens * p.input * 1.25) / M +
     (u.output_tokens * p.output) / M
   );
+}
+
+// ---------- 글자로만 온 보고를 보고체로 다듬기 (사진 없음) ----------
+export const TextReportSchema = z.object({
+  place: z.string(),       // 장소, 없으면 "-"
+  task: z.string(),        // 업무 종류
+  report_text: z.string(), // 다듬은 보고문 1~2문장
+});
+export type TextReport = z.infer<typeof TextReportSchema>;
+
+const TEXT_SYSTEM_PROMPT = `너는 피트니스 스튜디오 직원이 대충 쓴 한 줄 메모를 깔끔한 업무 보고문으로 다듬는 도우미다.
+규칙:
+- 내용을 추가하거나 지어내지 않는다. 직원이 쓴 사실만 정리한다.
+- report_text 는 한국어 보고체 1~2문장, 40자 안팎. 첫 문장은 "(장소) 업무 완료" 형태. 예: "유선상담 완료. 김OO 회원 PT 등록 문의 응대."
+- 장소가 없으면 place 는 "-".
+- 알려진 구역 목록(층별):
+${FLOORS.map((f) => `- ${f.floor}: ${f.places.join(", ")}`).join("\n")}
+  메모에 이 중 하나가 보이면 place 에 그 이름을 그대로 쓴다.`;
+
+export async function tidyTextReport(
+  text: string,
+  reporterName: string,
+): Promise<{ result: TextReport; usage: AiUsage; model: string }> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY 가 설정되지 않았습니다.");
+  const client = new Anthropic();
+  const response = await client.messages.parse({
+    model: AI_MODEL,
+    max_tokens: 2000,
+    system: [{ type: "text", text: TEXT_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+    output_config: { effort: "low", format: zodOutputFormat(TextReportSchema) },
+    messages: [{ role: "user", content: `직원 이름: ${reporterName}. 메모: "${text}". JSON 으로 답해라.` }],
+  });
+  if (response.stop_reason === "refusal" || !response.parsed_output) {
+    throw new Error("AI 가 메모를 다듬지 못했습니다.");
+  }
+  const u = response.usage;
+  return {
+    result: response.parsed_output,
+    usage: {
+      input_tokens: u.input_tokens ?? 0,
+      output_tokens: u.output_tokens ?? 0,
+      cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+      cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+    },
+    model: response.model ?? AI_MODEL,
+  };
 }

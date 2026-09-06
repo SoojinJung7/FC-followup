@@ -6,7 +6,7 @@
 // ============================================================
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AREAS, FLOORS, shortName, tg, cleaningChatId, kstParts, kstTodayRange, buildSummary, type PostedRow } from "@/lib/cleaning";
-import { analyzePhotos, estimateUsd, type Analysis, type AiImage, type AiUsage } from "@/lib/ai";
+import { analyzePhotos, tidyTextReport, estimateUsd, type Analysis, type AiImage, type AiUsage } from "@/lib/ai";
 
 export type TgUser = { id: number; first_name?: string; last_name?: string; username?: string };
 export type TgPhotoSize = { file_id: string; width: number; height: number };
@@ -160,6 +160,99 @@ async function downloadTelegramImage(fileId: string): Promise<AiImage> {
   return { data: buf.toString("base64"), media_type };
 }
 
+// [이대로 보고] 확인 버튼
+function confirmKeyboard(reportId: string) {
+  return {
+    inline_keyboard: [
+      [{ text: "✅ 이대로 보고", callback_data: `r:${reportId}:ok` }],
+      [
+        { text: "✏️ 장소 고치기", callback_data: `r:${reportId}:fix` },
+        { text: "✖ 취소", callback_data: `r:${reportId}:x` },
+      ],
+    ],
+  };
+}
+
+// 업무 종류에 어울리는 아이콘
+export function emojiFor(task: string | null | undefined, text: string) {
+  const s = `${task ?? ""} ${text}`;
+  if (/청소|물기|쓰레기|닦/.test(s)) return "🧹";
+  if (/꽃|장식/.test(s)) return "💐";
+  if (/인스타|SNS|게시|업로드/.test(s)) return "📱";
+  if (/전단|포스터|부착/.test(s)) return "📌";
+  if (/상담|전화|유선/.test(s)) return "📞";
+  if (/출력|인쇄|시험지|제작/.test(s)) return "🖨️";
+  if (/점검|고장|수리/.test(s)) return "🔧";
+  if (/비품|보충|입고|검수/.test(s)) return "📦";
+  return "📋";
+}
+
+// ---------- 글자로만 온 보고 (사진 없음) ----------
+export async function createTextReport(opts: { chatId: number; messageId: number; from?: TgUser; text: string }) {
+  const supabase = createAdminClient();
+  const { data: report, error } = await supabase
+    .from("reports")
+    .insert({
+      chat_id: opts.chatId,
+      media_group_id: `text:${opts.messageId}`,
+      reporter_id: opts.from?.id ?? null,
+      reporter_name: displayName(opts.from),
+      status: "analyzing",
+      report_text: opts.text,
+      prompt_message_id: -1,
+    })
+    .select("id")
+    .single();
+  if (error || !report) throw new Error(`글자 보고 생성 실패: ${error?.message}`);
+  const sent = await tg<{ message_id: number }>("sendMessage", {
+    chat_id: opts.chatId,
+    text: "📝 받았어요! 보고문으로 정리 중이에요…",
+  });
+  await supabase.from("reports").update({ prompt_message_id: sent.message_id }).eq("id", report.id);
+  return { reportId: report.id as string, ackId: sent.message_id };
+}
+
+export async function finishTextReport(reportId: string, chatId: number, ackId: number, rawText: string, reporterName: string) {
+  const supabase = createAdminClient();
+  let place = "-";
+  let task = "업무";
+  let text = rawText.trim();
+  let usage: AiUsage | null = null;
+  let model: string | null = null;
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const r = await tidyTextReport(rawText, reporterName);
+      place = r.result.place || "-";
+      task = r.result.task || task;
+      text = r.result.report_text || text;
+      usage = r.usage;
+      model = r.model;
+    } catch (e) {
+      console.error("글자 보고 다듬기 실패(원문 사용):", e);
+    }
+  }
+  const { label, timeStr } = kstParts();
+  const mid = await showPrompt(
+    chatId,
+    ackId,
+    `🤖 이렇게 보고할게요\n\n<b>${escapeHtml(text)}</b>\n\n<i>${label} ${timeStr}</i>`,
+    confirmKeyboard(reportId),
+  );
+  await supabase
+    .from("reports")
+    .update({
+      status: "awaiting",
+      place: place === "-" ? null : place,
+      task,
+      report_text: text,
+      usage_json: usage,
+      model,
+      prompt_message_id: mid,
+      analyzed_at: new Date().toISOString(),
+    })
+    .eq("id", reportId);
+}
+
 // 접수 메시지가 있으면 그걸 결과로 바꾸고, 없으면 새로 보냄
 async function showPrompt(
   chatId: number,
@@ -244,15 +337,7 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
         ackId,
         `🤖 이렇게 보고할게요\n\n<b>${escapeHtml(analysis.report_text)}</b>\n\n` +
           `<i>사진 ${count}장 · ${label} ${timeStr} · 확신 ${confKo}</i>`,
-        {
-          inline_keyboard: [
-            [{ text: "✅ 이대로 보고", callback_data: `r:${reportId}:ok` }],
-            [
-              { text: "✏️ 장소 고치기", callback_data: `r:${reportId}:fix` },
-              { text: "✖ 취소", callback_data: `r:${reportId}:x` },
-            ],
-          ],
-        },
+        confirmKeyboard(reportId),
       );
     }
 
@@ -260,7 +345,7 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
       .from("reports")
       .update({
         status: "awaiting",
-        place: analysis.place,
+        place: analysis.place === "-" ? null : analysis.place,
         task: analysis.task,
         confidence: analysis.confidence,
         report_text: analysis.report_text,
@@ -323,7 +408,7 @@ export function placeKeyboard(reportId: string, floorIdx: number) {
 
 // 보고문 조립 (장소를 직원이 정했을 때)
 function composeText(place: string, ai: Analysis | null) {
-  const task = ai?.task || "청소";
+  const task = ai?.task || "작업";
   const detail = ai?.action_summary?.trim();
   return detail ? `${place} ${task} 완료. ${detail}` : `${place} ${task} 완료.`;
 }
@@ -492,7 +577,7 @@ async function editPrompt(report: { chat_id: number; prompt_message_id: number |
 
 // ---------- 5) 공용방 게시 ----------
 async function postToGroup(
-  report: { id: string; chat_id: number; prompt_message_id: number | null; reporter_name: string | null },
+  report: { id: string; chat_id: number; prompt_message_id: number | null; reporter_name: string | null; task?: string | null },
   place: string | null,
   text: string,
 ): Promise<string> {
@@ -516,7 +601,7 @@ async function postToGroup(
 
   const now = new Date();
   const { label, timeStr } = kstParts(now);
-  const caption = `🧹 <b>${escapeHtml(text)}</b>\n${label} ${timeStr} · ${report.reporter_name ?? "직원"}`;
+  const caption = `${emojiFor(report.task, text)} <b>${escapeHtml(text)}</b>\n${label} ${timeStr} · ${report.reporter_name ?? "직원"}`;
 
   try {
     let ids: number[] = [];
