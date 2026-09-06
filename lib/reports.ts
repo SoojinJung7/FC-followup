@@ -166,9 +166,10 @@ function confirmKeyboard(reportId: string) {
     inline_keyboard: [
       [{ text: "✅ 이대로 보고", callback_data: `r:${reportId}:ok` }],
       [
-        { text: "✏️ 장소 고치기", callback_data: `r:${reportId}:fix` },
-        { text: "✖ 취소", callback_data: `r:${reportId}:x` },
+        { text: "✏️ 문장 고치기", callback_data: `r:${reportId}:e` },
+        { text: "📍 장소 고치기", callback_data: `r:${reportId}:fix` },
       ],
+      [{ text: "✖ 취소", callback_data: `r:${reportId}:x` }],
     ],
   };
 }
@@ -413,22 +414,31 @@ function composeText(place: string, ai: Analysis | null) {
   return detail ? `${place} ${task} 완료. ${detail}` : `${place} ${task} 완료.`;
 }
 
-// 직원이 글자로 장소를 답했을 때 (editing 상태인 보고가 있으면 그걸로 게시)
+// 직원이 글자로 답했을 때: 장소 수정 중(editing)이면 장소로, 문장 수정 중(editing_text)이면 문장 그대로 게시
 export async function handleTypedPlace(chatId: number, text: string): Promise<boolean> {
-  const place = text.trim().slice(0, 40);
-  if (!place || place.startsWith("/")) return false;
+  const typed = text.trim();
+  if (!typed || typed.startsWith("/")) return false;
   const supabase = createAdminClient();
   const { data: report } = await supabase
     .from("reports")
     .select("*")
     .eq("chat_id", chatId)
-    .eq("status", "editing")
+    .in("status", ["editing", "editing_text"])
     .order("received_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (!report) return false;
   const ai = report.ai_json as Analysis | null;
-  const result = await postToGroup(report, place, composeText(place, ai));
+  let place: string | null;
+  let finalText: string;
+  if (report.status === "editing_text") {
+    place = (report.place as string | null) ?? null;
+    finalText = typed.slice(0, 900);
+  } else {
+    place = typed.slice(0, 40);
+    finalText = composeText(place, ai);
+  }
+  const result = await postToGroup(report, place, finalText);
   if (!result.includes("완료")) {
     await tg("sendMessage", { chat_id: chatId, text: result });
   }
@@ -468,10 +478,11 @@ export type Decision =
   | { kind: "area"; index: number }
   | { kind: "floor"; index: number }
   | { kind: "type" }
+  | { kind: "edit" }
   | { kind: "cancel" };
 
 export function parseCallback(data: string): { reportId: string; decision: Decision } | null {
-  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|t|o(\d+)|a(\d+)|f(\d+))$/.exec(data);
+  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|t|e|o(\d+)|a(\d+)|f(\d+))$/.exec(data);
   if (!m) return null;
   const reportId = m[1];
   const code = m[2];
@@ -479,6 +490,7 @@ export function parseCallback(data: string): { reportId: string; decision: Decis
   if (code === "fix") return { reportId, decision: { kind: "fix" } };
   if (code === "x") return { reportId, decision: { kind: "cancel" } };
   if (code === "t") return { reportId, decision: { kind: "type" } };
+  if (code === "e") return { reportId, decision: { kind: "edit" } };
   if (code.startsWith("o")) return { reportId, decision: { kind: "option", index: Number(m[3]) } };
   if (code.startsWith("a")) return { reportId, decision: { kind: "area", index: Number(m[4]) } };
   return { reportId, decision: { kind: "floor", index: Number(m[5]) } };
@@ -490,7 +502,7 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
   if (!report) return "보고를 찾지 못했어요.";
   if (report.status === "posted") return "이미 보고됐어요.";
   if (report.status === "cancelled") return "취소된 보고예요.";
-  if (report.status !== "awaiting" && report.status !== "editing") return "처리 중이에요. 잠시만요.";
+  if (!["awaiting", "editing", "editing_text"].includes(report.status)) return "처리 중이에요. 잠시만요.";
 
   const ai = report.ai_json as Analysis | null;
 
@@ -518,6 +530,22 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
       message_id: report.prompt_message_id,
       text: `${f.floor} 어디예요? 👇`,
       reply_markup: placeKeyboard(reportId, decision.index),
+    });
+    return "";
+  }
+
+  if (decision.kind === "edit") {
+    await supabase.from("reports").update({ status: "editing_text" }).eq("id", reportId);
+    const current = (report.report_text as string | null) ?? "";
+    await tg("editMessageText", {
+      chat_id: report.chat_id,
+      message_id: report.prompt_message_id,
+      parse_mode: "HTML",
+      text:
+        `✏️ 원하는 문장을 <b>답장으로</b> 보내주세요. 그대로 올라가요.\n\n` +
+        `지금 문장:\n<code>${escapeHtml(current)}</code>\n\n` +
+        `<i>위 문장을 꾹 눌러 복사한 뒤 고쳐서 보내면 편해요</i>`,
+      reply_markup: { inline_keyboard: [[{ text: "✖ 취소", callback_data: `r:${reportId}:x` }]] },
     });
     return "";
   }
@@ -588,7 +616,7 @@ async function postToGroup(
     .from("reports")
     .update({ status: "posting" })
     .eq("id", report.id)
-    .in("status", ["awaiting", "editing"])
+    .in("status", ["awaiting", "editing", "editing_text"])
     .select("id")
     .maybeSingle();
   if (!claimed) return "이미 처리 중이에요.";
