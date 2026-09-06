@@ -201,7 +201,7 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
       try {
         const images = await Promise.all(photos!.map((p) => downloadTelegramImage(p.small_file_id)));
         const tAi = Date.now();
-        const r = await analyzePhotos(images, reporterName);
+        const r = await analyzePhotos(images, reporterName, await knownPlaces());
         console.log(`[report ${reportId}] AI ${Date.now() - tAi}ms`);
         analysis = r.analysis;
         usage = r.usage;
@@ -288,13 +288,64 @@ async function analyzeAndAsk(reportId: string, chatId: number, reporterName: str
   console.log(`[report ${reportId}] 분석→버튼까지 ${Date.now() - t0}ms (사진 ${count}장, AI ${analysis ? "성공" : "없음"})`);
 }
 
-export function areaKeyboard(reportId: string) {
+export function areaKeyboard(reportId: string, withTyping = false) {
   return {
     inline_keyboard: [
       ...AREAS.map((a, i) => [{ text: `🧹 ${a}`, callback_data: `r:${reportId}:a${i}` }]),
+      ...(withTyping ? [[{ text: "✍️ 다른 장소 직접 입력", callback_data: `r:${reportId}:t` }]] : []),
       [{ text: "✖ 취소", callback_data: `r:${reportId}:x` }],
     ],
   };
+}
+
+// 보고문 조립 (장소를 직원이 정했을 때)
+function composeText(place: string, ai: Analysis | null) {
+  const task = ai?.task || "청소";
+  const detail = ai?.action_summary?.trim();
+  return detail ? `${place} ${task} 완료. ${detail}` : `${place} ${task} 완료.`;
+}
+
+// 직원이 글자로 장소를 답했을 때 (editing 상태인 보고가 있으면 그걸로 게시)
+export async function handleTypedPlace(chatId: number, text: string): Promise<boolean> {
+  const place = text.trim().slice(0, 40);
+  if (!place || place.startsWith("/")) return false;
+  const supabase = createAdminClient();
+  const { data: report } = await supabase
+    .from("reports")
+    .select("*")
+    .eq("chat_id", chatId)
+    .eq("status", "editing")
+    .order("received_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!report) return false;
+  const ai = report.ai_json as Analysis | null;
+  const result = await postToGroup(report, place, composeText(place, ai));
+  if (!result.includes("완료")) {
+    await tg("sendMessage", { chat_id: chatId, text: result });
+  }
+  return true;
+}
+
+// 이 매장에서 실제로 보고된 장소들 (AI 에게 힌트로 줌 → 쓸수록 똑똑해짐)
+export async function knownPlaces(): Promise<string[]> {
+  const supabase = createAdminClient();
+  const since = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+  const { data } = await supabase
+    .from("reports")
+    .select("place")
+    .eq("status", "posted")
+    .gte("posted_at", since)
+    .not("place", "is", null)
+    .order("posted_at", { ascending: false })
+    .limit(300);
+  const counts = new Map<string, number>();
+  for (const r of data ?? []) {
+    const p = (r.place as string).trim();
+    if (!p || (AREAS as readonly string[]).includes(p)) continue;
+    counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([p]) => p);
 }
 
 function escapeHtml(s: string) {
@@ -307,16 +358,18 @@ export type Decision =
   | { kind: "option"; index: number }
   | { kind: "fix" }
   | { kind: "area"; index: number }
+  | { kind: "type" }
   | { kind: "cancel" };
 
 export function parseCallback(data: string): { reportId: string; decision: Decision } | null {
-  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|o(\d)|a(\d))$/.exec(data);
+  const m = /^r:([0-9a-f-]{36}):(ok|fix|x|t|o(\d)|a(\d))$/.exec(data);
   if (!m) return null;
   const reportId = m[1];
   const code = m[2];
   if (code === "ok") return { reportId, decision: { kind: "ok" } };
   if (code === "fix") return { reportId, decision: { kind: "fix" } };
   if (code === "x") return { reportId, decision: { kind: "cancel" } };
+  if (code === "t") return { reportId, decision: { kind: "type" } };
   if (code.startsWith("o")) return { reportId, decision: { kind: "option", index: Number(m[3]) } };
   return { reportId, decision: { kind: "area", index: Number(m[4]) } };
 }
@@ -327,7 +380,7 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
   if (!report) return "보고를 찾지 못했어요.";
   if (report.status === "posted") return "이미 보고됐어요.";
   if (report.status === "cancelled") return "취소된 보고예요.";
-  if (report.status !== "awaiting") return "처리 중이에요. 잠시만요.";
+  if (report.status !== "awaiting" && report.status !== "editing") return "처리 중이에요. 잠시만요.";
 
   const ai = report.ai_json as Analysis | null;
 
@@ -342,7 +395,19 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
       chat_id: report.chat_id,
       message_id: report.prompt_message_id,
       text: "어느 구역이에요? 👇",
-      reply_markup: areaKeyboard(reportId),
+      reply_markup: areaKeyboard(reportId, true),
+    });
+    return "";
+  }
+
+  if (decision.kind === "type") {
+    await supabase.from("reports").update({ status: "editing" }).eq("id", reportId);
+    await tg("editMessageText", {
+      chat_id: report.chat_id,
+      message_id: report.prompt_message_id,
+      parse_mode: "HTML",
+      text: "✍️ 장소 이름을 <b>답장으로</b> 보내주세요.\n예: 3층 헬스장 정수기\n\n<i>한 번 알려주면 다음부터 AI 가 기억해요</i>",
+      reply_markup: { inline_keyboard: [[{ text: "✖ 취소", callback_data: `r:${reportId}:x` }]] },
     });
     return "";
   }
@@ -359,9 +424,7 @@ export async function handleDecision(reportId: string, decision: Decision): Prom
     const area = AREAS[decision.index];
     if (!area) return "알 수 없는 구역이에요.";
     place = area;
-    const task = ai?.task || "청소";
-    const detail = ai?.action_summary?.trim();
-    text = detail ? `${area} ${task} 완료. ${detail}` : `${area} ${task} 완료.`;
+    text = composeText(area, ai);
   }
   if (!text) text = `${place ?? "업무"} 완료.`;
 
@@ -403,7 +466,7 @@ async function postToGroup(
     .from("reports")
     .update({ status: "posting" })
     .eq("id", report.id)
-    .eq("status", "awaiting")
+    .in("status", ["awaiting", "editing"])
     .select("id")
     .maybeSingle();
   if (!claimed) return "이미 처리 중이에요.";

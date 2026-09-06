@@ -7,6 +7,7 @@ import {
   recoverStale,
   parseCallback,
   handleDecision,
+  handleTypedPlace,
   todaySummaryText,
   monthCostText,
   type TgUser,
@@ -141,7 +142,9 @@ export async function POST(request: Request) {
         });
       } else if (msg.text) {
         after(() => recoverStale(msg.chat.id).catch((e) => console.error("복구 오류:", e)));
-        await onText(msg);
+        // 장소를 글자로 답하는 중이면 그걸로 게시
+        const handled = await handleTypedPlace(msg.chat.id, msg.text);
+        if (!handled) await onText(msg);
       } else {
         await tg("sendMessage", {
           chat_id: msg.chat.id,
