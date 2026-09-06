@@ -32,8 +32,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // 정적 파일과 로그인 콜백을 제외한 모든 경로에 적용
+  // 정적 파일과 API(텔레그램 웹훅·크론)를 제외한 모든 페이지에 적용
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
